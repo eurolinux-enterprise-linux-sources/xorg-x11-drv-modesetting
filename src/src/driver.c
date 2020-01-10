@@ -86,7 +86,7 @@ static Bool ms_driver_func(ScrnInfoPtr scrn, xorgDriverFuncOp op,
 static const struct pci_id_match ms_device_match[] = {
     {
 	PCI_MATCH_ANY, PCI_MATCH_ANY, PCI_MATCH_ANY, PCI_MATCH_ANY,
-	0x00030000, 0x00ffffff, 0
+	0x00030000, 0x00ff0000, 0
     },
 
     { 0, 0, 0 },
@@ -201,12 +201,25 @@ static int open_hw(char *dev)
     return fd;
 }
 
+static int check_outputs(int fd)
+{
+    drmModeResPtr res = drmModeGetResources(fd);
+    int ret;
+
+    if (!res)
+        return FALSE;
+    ret = res->count_connectors > 0;
+    drmModeFreeResources(res);
+    return ret;
+}
+
 static Bool probe_hw(char *dev)
 {
     int fd = open_hw(dev);
     if (fd != -1) {
+        int ret = check_outputs(fd);
         close(fd);
-	return TRUE;
+        return ret;
     }
     return FALSE;
 }
@@ -226,7 +239,7 @@ ms_DRICreatePCIBusID(const struct pci_device *dev)
 
 static Bool probe_hw_pci(char *dev, struct pci_device *pdev)
 {
-    int fd = open_hw(dev);
+    int ret = FALSE, fd = open_hw(dev);
     char *id, *devid;
     drmSetVersion sv;
 
@@ -247,13 +260,12 @@ static Bool probe_hw_pci(char *dev, struct pci_device *pdev)
     devid = ms_DRICreatePCIBusID(pdev);
     close(fd);
 
-    if (!id || !devid)
-	return FALSE;
+    if (id && devid && !strcmp(id, devid))
+        ret = check_outputs(fd);
 
-    if (!strcmp(id, devid))
-	return TRUE;
-
-    return FALSE;
+    free(id);
+    free(devid);
+    return ret;
 }
 static const OptionInfoRec *
 AvailableOptions(int chipid, int busid)
@@ -428,10 +440,13 @@ static int dispatch_dirty_region(ScrnInfoPtr scrn,
     unsigned num_cliprects = REGION_NUM_RECTS(dirty);
 
     if (num_cliprects) {
-	drmModeClip *clip = alloca(num_cliprects * sizeof(drmModeClip));
+	drmModeClip *clip = malloc(num_cliprects * sizeof(drmModeClip));
 	BoxPtr rect = REGION_RECTS(dirty);
 	int i, ret;
 	    
+	if (!clip)
+	    return -ENOMEM;
+
 	/* XXX no need for copy? */
 	for (i = 0; i < num_cliprects; i++, rect++) {
 	    clip[i].x1 = rect->x1;
@@ -442,6 +457,7 @@ static int dispatch_dirty_region(ScrnInfoPtr scrn,
 
 	/* TODO query connector property to see if this is needed */
 	ret = drmModeDirtyFB(ms->fd, fb_id, clip, num_cliprects);
+	free(clip);
 	DamageEmpty(damage);
 	if (ret) {
 	    if (ret == -EINVAL)
@@ -526,15 +542,27 @@ static void msBlockHandler(BLOCKHANDLER_ARGS_DECL)
 static void
 FreeRec(ScrnInfoPtr pScrn)
 {
+    modesettingPtr ms;
+
     if (!pScrn)
-	return;
+        return;
 
-    if (!pScrn->driverPrivate)
-	return;
-
-    free(pScrn->driverPrivate);
-
+    ms = modesettingPTR(pScrn);
+    if (!ms)
+        return;
     pScrn->driverPrivate = NULL;
+
+    if (ms->fd > 0) {
+        int ret;
+
+        if (ms->pEnt->location.type == BUS_PCI)
+            ret = drmClose(ms->fd);
+        else
+            ret = close(ms->fd);
+    }
+    free(ms->Options);
+    free(ms);
+
 }
 
 static Bool
@@ -592,8 +620,8 @@ PreInit(ScrnInfoPtr pScrn, int flags)
 
 #if XSERVER_PLATFORM_BUS
     if (pEnt->location.type == BUS_PLATFORM) {
-            char *path = xf86_get_platform_device_attrib(pEnt->location.id.plat, ODEV_ATTRIB_PATH);
-            ms->fd = open_hw(path);
+        char *path = xf86_get_platform_device_attrib(pEnt->location.id.plat, ODEV_ATTRIB_PATH);
+        ms->fd = open_hw(path);
     }
     else 
 #endif
@@ -634,7 +662,7 @@ PreInit(ScrnInfoPtr pScrn, int flags)
 #endif
     drmmode_get_default_bpp(pScrn, &ms->drmmode, &defaultdepth, &defaultbpp);
     if (defaultdepth == 24 && defaultbpp == 24)
-	    bppflags = Support24bppFb;
+	    bppflags = SupportConvert32to24 | Support24bppFb;
     else
 	    bppflags = PreferConvert24to32 | SupportConvert24to32 | Support32bppFb;
     
@@ -897,7 +925,6 @@ ScreenInit(SCREEN_INIT_ARGS_DECL)
 
     xf86SetBlackWhitePixels(pScreen);
 
-    miInitializeBackingStore(pScreen);
     xf86SetBackingStore(pScreen);
     xf86SetSilkenMouse(pScreen);
     miDCInitialize(pScreen, xf86GetPointerScreenFuncs());
@@ -941,16 +968,9 @@ static void
 AdjustFrame(ADJUST_FRAME_ARGS_DECL)
 {
     SCRN_INFO_PTR(arg);
-    xf86CrtcConfigPtr config = XF86_CRTC_CONFIG_PTR(pScrn);
-    xf86OutputPtr output = config->output[config->compat_output];
-    xf86CrtcPtr crtc = output->crtc;
+    modesettingPtr ms = modesettingPTR(pScrn);
 
-    if (crtc && crtc->enabled) {
-	crtc->funcs->mode_set(crtc, pScrn->currentMode, pScrn->currentMode, x,
-			      y);
-	crtc->x = output->initial_x + x;
-	crtc->y = output->initial_y + y;
-    }
+    drmmode_adjust_frame(pScrn, &ms->drmmode, x, y);
 }
 
 static void
