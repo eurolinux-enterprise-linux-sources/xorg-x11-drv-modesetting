@@ -5,7 +5,7 @@
 Summary:   Xorg X11 modesetting video driver
 Name:      xorg-x11-drv-modesetting
 Version:   0.8.0
-Release:   6%{?dist}
+Release:   13%{?dist}
 URL:       http://www.x.org
 License:   MIT
 Group:     User Interface/X Hardware Support
@@ -14,9 +14,17 @@ Source0:   ftp://ftp.x.org/pub/individual/driver/%{tarball}-%{version}.tar.bz2
 
 Patch0: 0001-modesetting-change-output-names-for-secondary-GPUs.patch
 Patch1: modesetting-0.8.0-xserver-1.15-compat.patch
+
+Patch2: 0001-modesetting-24bpp-are-too-confusing-shadow-our-way-o.patch
+Patch3: 0002-add-mga_g200_a-workaround.patch
+
+Patch4: 0001-modesetting-move-closing-fd-to-after-we-check-output.patch
+Patch5: swcursor-hack.patch
+
 # all X hw drivers aren't built on s390 - no need for separate bug
 ExcludeArch: s390 s390x
 
+BuildRequires: libudev-devel
 BuildRequires: xorg-x11-server-devel >= 1.10.99.902
 BuildRequires: libX11-devel
 BuildRequires: libdrm-devel
@@ -39,6 +47,10 @@ X.Org X11 modesetting video driver - basic modesetting fallback driver.
 %setup -q -n %{tarball}-%{version}
 %patch0 -p1 -b .fixnames
 %patch1 -p1 -b .compat
+%patch2 -p1 -b .bpp24
+%patch3 -p1 -b .mgag200
+%patch4 -p1 -b .fixprobe
+%patch5 -p1 -b .swcursor
 
 %build
 autoreconf -vif
@@ -58,6 +70,27 @@ find $RPM_BUILD_ROOT -regex ".*\.la$" | xargs rm -f --
 %doc COPYING README
 
 %changelog
+* Thu Feb 27 2014 Adam Jackson <ajax@redhat.com> 0.8.0-13
+- Force software cursor on drivers where we know hardware doesn't work
+
+* Mon Feb 24 2014 Dave Airlie <airlied@redhat.com> 0.8.0-12
+- fix fd close before use (#1062663)
+
+* Thu Jan 23 2014 Dave Airlie <airlied@redhat.com> 0.8.0-11
+- add 32 bpp shadow for 24 bpp hw support - add workaround to use this on early mgag200
+
+* Mon Jan 20 2014 Dave Airlie <airlied@redhat.com> 0.8.0-10
+- add missing BR for libudev-devel so hotplug works
+
+* Mon Jan 13 2014 Adam Jackson <ajax@redhat.com> - 0.8.0-9
+- 1.15 ABI rebuild
+
+* Tue Dec 17 2013 Adam Jackson <ajax@redhat.com> - 0.8.0-8
+- 1.15RC4 ABI rebuild
+
+* Wed Nov 20 2013 Adam Jackson <ajax@redhat.com> - 0.8.0-7
+- 1.15RC2 ABI rebuild
+
 * Wed Nov 06 2013 Adam Jackson <ajax@redhat.com> - 0.8.0-6
 - 1.15RC1 ABI rebuild
 
